@@ -1,0 +1,13 @@
+{
+  "name": "lg-systems-mods",
+  "owner": {
+    "name": "LG-Systems"
+  },
+  "plugins": [
+    {
+      "name": "usage-bars",
+      "source": "./"
+    }
+  ],
+  "description": "Mods da LG-Systems para o Claude Code"
+}
