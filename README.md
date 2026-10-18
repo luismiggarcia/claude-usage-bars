@@ -15,7 +15,7 @@ A Claude Code mod that shows four meters in one line right above the prompt box:
 - In the red band a meter shows its alternative text by itself.
 - On the desktop the bars are thin SVG pills; in the terminal, blocks of colour.
 
-Session and week figures arrive with each API response. Every session with the mod writes its latest reading to `~/.claude/usage-bars/latest.json` and, every 30 seconds, takes a fresher one another session wrote: an idle session shows what an active one saw, and the verbose text says how old the reading is. Past its reset time a window shows `0%` until a new reading arrives. The cache lifetime is assumed to be 1 hour.
+Session and week figures arrive with each API response. Every session with the mod writes its latest reading to `~/.claude/usage-bars/latest.json` and, every 30 seconds, takes a fresher one another session wrote: an idle session shows what an active one saw, and the verbose text says how old the reading is. The file is written whole beside it and moved over it, so no session reads it half written, and an older reading never replaces a fresher one. Past its reset time a window shows `0%` until a new reading arrives. The cache lifetime is assumed to be 1 hour; the time of each session's last response is kept in the mod's store, so a resumed session picks up its countdown.
 
 ## Install
 

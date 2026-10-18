@@ -15,6 +15,12 @@ type Key = 'ctx' | 'cch' | 'ses' | 'wk'
 type Shared = { readAt: number; fiveHour: Window | null; week: Window | null }
 const SHARED_FILE = '.claude/usage-bars/latest.json'
 
+// When each session's main conversation last got a response, kept in the
+// plugin's store so a resumed session (or a hot reload) picks up the cache
+// countdown where it was. Entries past the cache lifetime are dropped.
+const LAST_RESPONSE_KEY = 'lastResponseAt'
+type LastResponses = Record<string, number>
+
 // One meter as drawn: the bar, the value beside it, and the two texts that
 // replace the bar: the alternative text (short) and its verbose form.
 type Meter = {
@@ -143,10 +149,42 @@ async function readShared($: any, path: string | null): Promise<Shared | null> {
   }
 }
 
+// Written whole to a file of this session's own, then moved over the shared one,
+// so a reader never meets it half written. Where the move cannot run (no `mv`,
+// no process on this host) it is written in place. A reading older than the
+// one already shared is not written: two sessions answering at once never
+// put the older one back.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function writeShared($: any, path: string | null, shared: Shared | null): Promise<void> {
+async function writeShared($: any, path: string | null, tmp: string | null, shared: Shared | null): Promise<void> {
   if (path === null || shared === null) return
-  await $.fs.write(path, JSON.stringify(shared)).catch(() => undefined)
+  const there = await readShared($, path)
+  if (there !== null && there.readAt > shared.readAt) return
+  const text = JSON.stringify(shared)
+  if (tmp !== null) {
+    const isMoved = await $.fs
+      .write(tmp, text)
+      .then(() => $.process.run(['mv', '-f', tmp, path]))
+      .then((r: { exitCode: number }) => r.exitCode === 0)
+      .catch(() => false)
+    if (isMoved) return
+  }
+  await $.fs.write(path, text).catch(() => undefined)
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function readLastResponses($: any): Promise<LastResponses> {
+  const value = await $.store.get(LAST_RESPONSE_KEY).catch(() => undefined)
+  return value !== null && typeof value === 'object' ? (value as LastResponses) : {}
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function saveLastResponse($: any, sessionId: string | null, at: number): Promise<void> {
+  if (sessionId === null) return
+  const kept: LastResponses = { [sessionId]: at }
+  for (const [id, t] of Object.entries(await readLastResponses($))) {
+    if (id !== sessionId && typeof t === 'number' && at - t < CACHE_TTL_MS) kept[id] = t
+  }
+  await $.store.set(LAST_RESPONSE_KEY, kept).catch(() => undefined)
 }
 
 export const register: Register = on => {
@@ -154,6 +192,9 @@ export const register: Register = on => {
   // When the session and week figures in `current` were read, by whichever session.
   let readAt: number | null = null
   let sharedPath: string | null = null
+  // This session's own file for writing the shared one whole before the move.
+  let tmpPath: string | null = null
+  let sessionId: string | null = null
   let lastResponseAt: number | null = null
   // Meters the person pinned to their alternative text with a click, and the
   // one under the pointer.
@@ -201,6 +242,11 @@ export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     const home = await $.env.get('HOME')
     sharedPath = home ? `${home}/${SHARED_FILE}` : null
+    sessionId = await $.session.id().catch(() => null)
+    tmpPath = sharedPath === null ? null : `${sharedPath}.${sessionId ?? crypto.randomUUID()}.tmp`
+    // A resumed session (or a reload) takes up the cache countdown it had.
+    const saved = sessionId === null ? undefined : (await readLastResponses($))[sessionId]
+    if (typeof saved === 'number') lastResponseAt = saved
     const { context, rateLimits } = await $.session.usage()
     current = toUsage(context, rateLimits)
     adopt(await readShared($, sharedPath))
@@ -216,7 +262,7 @@ export const register: Register = on => {
 
   on('session.measure', async ($, e, next) => {
     current = toUsage(e.context, e.rateLimits)
-    if (e.rateLimits.length > 0) await writeShared($, sharedPath, stamp(await $.clock.now()))
+    if (e.rateLimits.length > 0) await writeShared($, sharedPath, tmpPath, stamp(await $.clock.now()))
     $.ui.invalidate('ui.render')
     return next(e)
   })
@@ -227,10 +273,11 @@ export const register: Register = on => {
     const result = await next(e)
     if (!e.agentId) {
       lastResponseAt = await $.clock.now()
+      await saveLastResponse($, sessionId, lastResponseAt)
       const { context, rateLimits } = await $.session.usage()
       if (rateLimits.length > 0) {
         current = toUsage(context, rateLimits)
-        await writeShared($, sharedPath, stamp(lastResponseAt))
+        await writeShared($, sharedPath, tmpPath, stamp(lastResponseAt))
       }
       $.ui.invalidate('ui.render')
     }
