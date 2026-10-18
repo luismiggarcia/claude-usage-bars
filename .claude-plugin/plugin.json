@@ -1,7 +1,7 @@
 {
   "name": "usage-bars",
   "version": "0.1.0",
-  "description": "Barras acima do prompt: contexto, sessão (5 horas) e semana, com detalhe no hover",
+  "description": "Context, cache, 5-hour session and weekly usage meters above the prompt",
   "author": {
     "name": "LG-Systems"
   }

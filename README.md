@@ -1,36 +1,41 @@
 # usage-bars
 
-Um mod para o Claude Code que mostra, numa linha imediatamente acima da caixa do prompt, três barras:
+A Claude Code mod that shows four meters in one line right above the prompt box:
 
-| Barra | O que mede | Detalhe no hover |
+| Meter | What it measures | Alternative text |
 | --- | --- | --- |
-| **Contexto** | o contexto da sessão atual já ocupado | tokens usados / janela |
-| **Sessão** | a janela de uso de 5 horas da conta | quanto falta para repor |
-| **Semana** | o limite semanal da conta | quanto falta para repor |
+| **Ctx** | context of the current session in use | used · total tokens |
+| **Cch** | time left before the prompt cache expires | minutes left · what the next prompt costs for the context now → once the cache has expired (input-token equivalents: 0.1× read, 2× rewrite) |
+| **Ses** | the account's 5-hour usage window | time to reset (`-2h 30m`) · reset time |
+| **Wk** | the account's weekly limit | time to reset · reset day and time |
 
-Cada barra tem a sua cor (azul, violeta, verde-água) e passa a vermelho a partir de 85%. No desktop as barras são pílulas finas em SVG; no terminal, blocos de cor.
+- Each bar keeps its own colour. The value beside it follows a scale: yellow from 75%, orange bold from 85%, red bold from 95%. For the cache the scale reads the time already gone, so it turns yellow with 15 minutes left.
+- Hovering a bar shows its alternative text, in two lines. A click on the bar or its label pins it; another click unpins it. Hovering a pinned text shows it in full.
+- Hovering a label (Ctx, Cch, Ses, Wk) shows its full name in the graph's place.
+- In the red band a meter shows its alternative text by itself.
+- On the desktop the bars are thin SVG pills; in the terminal, blocks of colour.
 
-Os valores de Sessão e Semana chegam com cada resposta da API: numa sessão parada ficam com o último valor que essa sessão viu.
+Session and week figures arrive with each API response. Every session with the mod writes its latest reading to `~/.claude/usage-bars/latest.json` and, every 30 seconds, takes a fresher one another session wrote: an idle session shows what an active one saw, and the verbose text says how old the reading is. Past its reset time a window shows `0%` until a new reading arrives. The cache lifetime is assumed to be 1 hour.
 
-## Instalar
+## Install
 
-No prompt de uma sessão de terminal:
+At the prompt of a terminal session:
 
 ```
 /plugin install usage-bars --marketplace luismiggarcia/claude-usage-bars
 ```
 
-Numa shell:
+From a shell:
 
 ```bash
 claude plugin install usage-bars --marketplace luismiggarcia/claude-usage-bars
 ```
 
-Na app desktop, onde `/plugin` não corre: clicar em **+** ao lado da caixa do prompt, depois **Plugins**, **Add marketplace** com `luismiggarcia/claude-usage-bars`, e **Add plugin**.
+In the desktop app, where `/plugin` does not run: click **+** next to the prompt box, then **Plugins**, **Add marketplace** with `luismiggarcia/claude-usage-bars`, then **Add plugin**.
 
-Instalado no âmbito do utilizador, carrega em todas as sessões novas.
+Installed at the user scope, it loads in every new session.
 
-## Desenvolver
+## Develop
 
 ```bash
 claude plugin validate .
