@@ -269,6 +269,19 @@ export const register: Register = on => {
 
   // The main conversation's last response renews the cache, and brought the
   // account's windows as they are now: share them.
+  // Every response of the main conversation renews the cache, the ones in the
+  // middle of a long turn too (each tool call's round trip rereads it): the
+  // countdown starts again as each one arrives, not only when the turn ends.
+  on('turn.step', async function* ($, e, next) {
+    const result = yield* next(e)
+    if (!e.agentId && result.usage !== null) {
+      lastResponseAt = await $.clock.now()
+      await saveLastResponse($, sessionId, lastResponseAt)
+      $.ui.invalidate('ui.render')
+    }
+    return result
+  })
+
   on('turn.complete', async ($, e, next) => {
     const result = await next(e)
     if (!e.agentId) {

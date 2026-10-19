@@ -139,3 +139,33 @@ test('past its lifetime the cache reads expired, with what the next prompt costs
   expect(cch.alt).toBe('Expired 15m ago. Next prompt: 180k')
   expect(cch.source).toContain('data-face="alt"')
 })
+
+test('each response in the middle of a long turn renews the cache', async ($, on) => {
+  let clock = NOW - 70 * MIN
+  world(on, { now: () => clock })
+  on('store.set', () => ({ value: undefined }))
+  on('fs.write', () => ({ value: undefined }))
+  on('process.run', () => ran(0))
+  const usageOf = { model: 'm', input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 90_000, cache_creation_input_tokens: 0 }
+  let answered = true
+  on('turn.step', async function* (_$, e) {
+    return { turnId: e.turnId, index: e.index, answer: '', toolUses: [], stopReason: answered ? 'tool_use' : null, usage: answered ? usageOf : null } as never
+  })
+  const step = async (index: number, agentId?: string) => {
+    for await (const _ of $.turn.step({ turnId: 't', index, model: 'm', messageCount: 3, ...(agentId ? { agentId } : {}) })) void _
+  }
+  await start($)
+  // the previous turn ended 70 minutes ago: by itself the cache would read expired
+  await respond($)
+  // a response of the turn still running, 5 minutes ago
+  clock = NOW - 5 * MIN
+  await step(0)
+  // a subagent's response, and a request of the main loop that got no answer: neither counts
+  clock = NOW - 1 * MIN
+  await step(1, 'agent-1')
+  answered = false
+  await step(2)
+  clock = NOW
+  const ui = await mountBand($)
+  expect(await ui.find({ type: 'Text', text: '55m' })).toBeDefined()
+})
