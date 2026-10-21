@@ -117,7 +117,7 @@ for (const surface of ['terminal', 'desktop'] as const) {
       // terminal: blocks in the meter's hue; the red-band week shows its alternative text
       const fills = (await ui.findAll({ type: 'Box' }))
         .map(props)
-        .filter(p => typeof p.width === 'string' && p.width !== '100%')
+        .filter(p => typeof p.width === 'string' && p.width !== '100%' && p.backgroundColor !== undefined)
         .map(p => [p.width, p.backgroundColor])
       expect(fills).toEqual([['45%', '#4f8ff7'], ['17%', '#e07bb5'], ['72%', '#9b7bf0']])
       expect(await ui.find({ type: 'Text', text: ` -2d 11h · ${day(WK_RESET)} ${hhmm(WK_RESET)}` })).toBeDefined()

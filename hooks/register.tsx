@@ -1,4 +1,4 @@
-import type { Register, SessionContextUsage, SessionRateLimit } from 'claude-code'
+import type { Register, SessionContextUsage, SessionRateLimit, TurnUsage } from 'claude-code'
 
 type Window = { percent: number; resetsAt?: string }
 
@@ -33,6 +33,11 @@ type Meter = {
   value: string
   alt: [string, string]
   verbose: [string, string]
+  // A tick on the bar, as a share of it (the context's auto-compact point).
+  mark?: number
+  // A stretch of the bar marked out, from and to, as shares of it (the
+  // context's: the time to compact or hand over).
+  zone?: readonly [number, number]
 }
 
 const pickWindow = (limits: readonly SessionRateLimit[], kind: string): Window | null => {
@@ -59,14 +64,52 @@ const RED_BAND = 95
 const TRACK = 'rgba(140,140,140,0.16)'
 const levelFor = (level: number) => SCALE.find(l => level >= l.from)
 
-// The prompt cache lives 1 hour after the last response (5 minutes once the
-// account is in overage: the mod cannot tell, so this is an estimate).
-const CACHE_TTL_MS = 60 * 60_000
+// The prompt cache lives 1 hour after the last response, or 5 minutes (an
+// account in overage, say). No response says which: the mod deduces it from
+// what a response after a pause read from the cache (deduceTtl), assumes 1
+// hour until it knows, and keeps what it learned in the store for every session.
+const TTL_1H = 60 * 60_000
+const TTL_5M = 5 * 60_000
+const TTL_KEY = 'cacheTtl'
 // The next prompt rereads the whole context: from a live cache at 0.1x a plain
-// input token, or, once the 1-hour cache has expired, writing it again at 2x.
-// (in hundredths, to keep the arithmetic exact)
+// input token, or, once the cache has expired, writing it again at 2x (1-hour
+// cache) or 1.25x (5-minute cache). (in hundredths, to keep the arithmetic exact)
 const CACHE_READ_HUNDREDTHS = 10
-const CACHE_WRITE_1H_HUNDREDTHS = 200
+const writeHundredths = (ttlMs: number) => (ttlMs === TTL_5M ? 125 : 200)
+
+// What a response after a pause says of the cache's lifetime. Past 5 minutes
+// and within the hour, a 5-minute cache has expired: the response writes most
+// of its input again; a 1-hour cache is still there: it reads most of it.
+// Only the same model counts (each model has its own cache), and a short
+// pause, a small prompt or a mixed reading say nothing.
+type Seen = { at: number; model: string }
+const deduceTtl = (prev: Seen | null, at: number, usage: TurnUsage): number | undefined => {
+  if (prev === null || prev.model !== usage.model) return undefined
+  const gap = at - prev.at
+  if (gap <= TTL_5M + 30_000 || gap >= TTL_1H) return undefined
+  const total = usage.input_tokens + usage.cache_read_input_tokens + usage.cache_creation_input_tokens
+  if (total < 4096) return undefined
+  if (usage.cache_read_input_tokens >= total * 0.8) return TTL_1H
+  if (usage.cache_creation_input_tokens >= total * 0.5) return TTL_5M
+  return undefined
+}
+
+// Warnings, each given once: the cache about to expire while the session
+// waits (per response), and the session or week window crossing 85% and 95%
+// (per reset and band, kept in the store so the other sessions do not repeat it).
+const WARNED_KEY = 'warned'
+type Warned = Record<string, number>
+const LIMIT_BANDS = [95, 85] as const
+const cacheWarnBefore = (ttlMs: number) => (ttlMs === TTL_5M ? 60_000 : 5 * 60_000)
+
+// The tick for the auto-compact point.
+const MARK = 'rgba(140,140,140,0.9)'
+// The context's zone, from half the window to three quarters: the time to deal
+// with its size (compact, hand over) before the model works on a crowded one.
+// A faint stretch of the track, ticked at both ends, in the scale's yellow.
+const CTX_ZONE = [50, 75] as const
+const ZONE_FILL = 'rgba(212,167,44,0.22)'
+const ZONE_TICK = 'rgba(212,167,44,0.85)'
 
 // Desktop: one cell of the band is about 9.5 px (measured: 95 columns).
 const PX_PER_COLUMN = 9.5
@@ -117,6 +160,7 @@ const meterSvg = (width: number, m: Meter, face: Face) => {
   const barWidth = width - 2 * BAR_INSET
   const r = BAR_HEIGHT / 2
   const top = (FRAME_HEIGHT - BAR_HEIGHT) / 2
+  const xAt = (percent: number) => BAR_INSET + (clamp(percent) / 100) * barWidth
   const fill = m.fill <= 0 ? 0 : Math.max(BAR_HEIGHT, (clamp(m.fill) / 100) * barWidth)
   const room = Math.max(4, Math.floor((width - BAR_INSET) / PX_PER_CHAR))
   const fit = (t: string) => (t.length > room ? `${t.slice(0, room - 1)}…` : t)
@@ -126,7 +170,18 @@ const meterSvg = (width: number, m: Meter, face: Face) => {
   const body =
     face === 'pill'
       ? `<rect x="${BAR_INSET}" y="${top}" width="${barWidth}" height="${BAR_HEIGHT}" rx="${r}" fill="${TRACK}"/>` +
-        (fill ? `<rect x="${BAR_INSET}" y="${top}" width="${fill.toFixed(1)}" height="${BAR_HEIGHT}" rx="${r}" fill="${color}"/>` : '')
+        (m.zone === undefined
+          ? ''
+          : `<rect x="${xAt(m.zone[0]).toFixed(1)}" y="${top}" width="${(xAt(m.zone[1]) - xAt(m.zone[0])).toFixed(1)}" height="${BAR_HEIGHT}" fill="${ZONE_FILL}" data-zone="band"/>`) +
+        (fill ? `<rect x="${BAR_INSET}" y="${top}" width="${fill.toFixed(1)}" height="${BAR_HEIGHT}" rx="${r}" fill="${color}"/>` : '') +
+        (m.zone === undefined
+          ? ''
+          : m.zone
+              .map(at => `<rect x="${(xAt(at) - 0.5).toFixed(1)}" y="${top - 2}" width="1" height="${BAR_HEIGHT + 4}" fill="${ZONE_TICK}" data-zone="${at}"/>`)
+              .join('')) +
+        (m.mark === undefined
+          ? ''
+          : `<rect x="${(BAR_INSET + (clamp(m.mark) / 100) * barWidth - 0.75).toFixed(1)}" y="${top - 3}" width="1.5" height="${BAR_HEIGHT + 6}" rx="0.75" fill="${MARK}" data-mark="compact"/>`)
       : lines(face === 'alt' ? m.alt : face === 'name' ? NAMES[m.key] : m.verbose)
   return (
     `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${FRAME_HEIGHT}" viewBox="0 0 ${width} ${FRAME_HEIGHT}" data-face="${face}">` +
@@ -182,9 +237,69 @@ async function saveLastResponse($: any, sessionId: string | null, at: number): P
   if (sessionId === null) return
   const kept: LastResponses = { [sessionId]: at }
   for (const [id, t] of Object.entries(await readLastResponses($))) {
-    if (id !== sessionId && typeof t === 'number' && at - t < CACHE_TTL_MS) kept[id] = t
+    if (id !== sessionId && typeof t === 'number' && at - t < TTL_1H) kept[id] = t
   }
   await $.store.set(LAST_RESPONSE_KEY, kept).catch(() => undefined)
+}
+
+// The lifetime a session deduced, kept in the store for all of them.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function readTtl($: any): Promise<number | undefined> {
+  const saved = await $.store.get(TTL_KEY).catch(() => undefined)
+  return saved === TTL_5M || saved === TTL_1H ? saved : undefined
+}
+
+// The token count at which the context is compacted; undefined when off.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function readCompactAt($: any): Promise<number | undefined> {
+  const usage = await $.session.usage({ breakdown: 'summary' }).catch(() => null)
+  const breakdown = usage?.context?.breakdown
+  return breakdown?.isAutoCompactEnabled ? breakdown.autoCompactThreshold : undefined
+}
+
+// A toast; an urgent one also as a notification, for a person away from the window.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function warn($: any, text: string, isUrgent: boolean, title: string): void {
+  try {
+    $.ui.toast(text, { timeoutMs: 15_000 })
+  } catch {
+    // nowhere to show it
+  }
+  if (!isUrgent) return
+  try {
+    void Promise.resolve($.ui.notify(text, { title })).catch(() => undefined)
+  } catch {
+    // no notification channel here
+  }
+}
+
+// The session or week window past 85% or 95%: once per reset and band, for
+// every session (the store remembers it was given).
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function warnLimits($: any, usage: Usage | null, now: number): Promise<void> {
+  if (usage === null) return
+  const windows = [
+    ['ses', 'Session', usage.fiveHour, false],
+    ['wk', 'Week', usage.week, true],
+  ] as const
+  const due = windows.flatMap(([key, name, w, isWeek]) => {
+    const resetAt = w?.resetsAt ? Date.parse(w.resetsAt) : NaN
+    const band = w ? LIMIT_BANDS.find(b => w.percent >= b) : undefined
+    if (!w || band === undefined || !Number.isFinite(resetAt) || resetAt <= now) return []
+    const when = isWeek ? dayTime(resetAt) : `at ${clockTime(resetAt)}`
+    return [{ id: `${key}:${resetAt}:${band}`, resetAt, band, text: `${name} at ${Math.round(w.percent)}% · resets ${when}` }]
+  })
+  if (due.length === 0) return
+  const saved = await $.store.get(WARNED_KEY).catch(() => undefined)
+  const warned: Warned = {}
+  for (const [id, at] of Object.entries((saved ?? {}) as Warned)) if (typeof at === 'number' && at > now) warned[id] = at
+  const fresh = due.filter(d => warned[d.id] === undefined)
+  if (fresh.length === 0) return
+  for (const d of fresh) {
+    warned[d.id] = d.resetAt
+    warn($, d.text, d.band >= RED_BAND, 'Usage limit')
+  }
+  await $.store.set(WARNED_KEY, warned).catch(() => undefined)
 }
 
 export const register: Register = on => {
@@ -196,6 +311,14 @@ export const register: Register = on => {
   let tmpPath: string | null = null
   let sessionId: string | null = null
   let lastResponseAt: number | null = null
+  // The last response's model, beside its time, to deduce the cache's lifetime.
+  let lastSeen: Seen | null = null
+  let ttl = TTL_1H
+  let isTurnRunning = false
+  // The response the cache warning was last given for.
+  let cacheWarnedFor: number | null = null
+  // The token count at which the context is compacted; undefined when off.
+  let compactAt: number | undefined
   // Meters the person pinned to their alternative text with a click, and the
   // one under the pointer.
   const pinned = new Set<Key>()
@@ -219,6 +342,21 @@ export const register: Register = on => {
     if (shared === null || current === null || (readAt !== null && shared.readAt <= readAt)) return
     current = { ...current, fiveHour: shared.fiveHour, week: shared.week }
     readAt = shared.readAt
+  }
+
+  // The cache about to expire while the session waits for a prompt: what to
+  // say, once per response, or null.
+  const cacheWarning = (now: number): string | null => {
+    if (isTurnRunning || lastResponseAt === null || cacheWarnedFor === lastResponseAt) return null
+    const left = lastResponseAt + ttl - now
+    if (left <= 0 || left > cacheWarnBefore(ttl)) return null
+    cacheWarnedFor = lastResponseAt
+    const tokens = current?.context.tokens
+    const cost =
+      tokens === undefined
+        ? ''
+        : `: the next prompt costs ${kTokens((tokens * CACHE_READ_HUNDREDTHS) / 100)} now, ${kTokens((tokens * writeHundredths(ttl)) / 100)} after`
+    return `Prompt cache expires in ${duration(left)}${cost}`
   }
 
   // The invisible regions over the graphs report the pointer here.
@@ -247,13 +385,21 @@ export const register: Register = on => {
     // A resumed session (or a reload) takes up the cache countdown it had.
     const saved = sessionId === null ? undefined : (await readLastResponses($))[sessionId]
     if (typeof saved === 'number') lastResponseAt = saved
+    ttl = (await readTtl($)) ?? ttl
     const { context, rateLimits } = await $.session.usage()
     current = toUsage(context, rateLimits)
+    compactAt = await readCompactAt($)
     adopt(await readShared($, sharedPath))
-    // Every 30 s: take a fresher reading another session shared, and redraw
-    // (the cache countdown and the reset times move on their own).
+    // Every 30 s: take a fresher reading and lifetime another session shared,
+    // warn what is due, and redraw (the cache countdown and the reset times
+    // move on their own).
     void $.clock.every(30_000, async () => {
       adopt(await readShared($, sharedPath))
+      ttl = (await readTtl($)) ?? ttl
+      const now = await $.clock.now()
+      const cacheText = cacheWarning(now)
+      if (cacheText !== null) warn($, cacheText, true, 'Prompt cache')
+      await warnLimits($, current, now)
       $.ui.invalidate('ui.render')
     })
     $.ui.invalidate('ui.render')
@@ -262,36 +408,53 @@ export const register: Register = on => {
 
   on('session.measure', async ($, e, next) => {
     current = toUsage(e.context, e.rateLimits)
-    if (e.rateLimits.length > 0) await writeShared($, sharedPath, tmpPath, stamp(await $.clock.now()))
+    const now = await $.clock.now()
+    if (e.rateLimits.length > 0) await writeShared($, sharedPath, tmpPath, stamp(now))
+    await warnLimits($, current, now)
     $.ui.invalidate('ui.render')
     return next(e)
   })
 
-  // The main conversation's last response renews the cache, and brought the
-  // account's windows as they are now: share them.
+  on('turn.start', async ($, e, next) => {
+    if (!e.agentId) isTurnRunning = true
+    return next(e)
+  })
+
   // Every response of the main conversation renews the cache, the ones in the
   // middle of a long turn too (each tool call's round trip rereads it): the
   // countdown starts again as each one arrives, not only when the turn ends.
   on('turn.step', async function* ($, e, next) {
     const result = yield* next(e)
     if (!e.agentId && result.usage !== null) {
-      lastResponseAt = await $.clock.now()
+      const at = await $.clock.now()
+      const learned = deduceTtl(lastSeen, at, result.usage)
+      if (learned !== undefined && learned !== ttl) {
+        ttl = learned
+        await $.store.set(TTL_KEY, ttl).catch(() => undefined)
+      }
+      lastSeen = { at, model: result.usage.model }
+      lastResponseAt = at
       await saveLastResponse($, sessionId, lastResponseAt)
       $.ui.invalidate('ui.render')
     }
     return result
   })
 
+  // The main conversation's last response renews the cache, and brought the
+  // account's windows as they are now: share them.
   on('turn.complete', async ($, e, next) => {
     const result = await next(e)
     if (!e.agentId) {
+      isTurnRunning = false
       lastResponseAt = await $.clock.now()
       await saveLastResponse($, sessionId, lastResponseAt)
       const { context, rateLimits } = await $.session.usage()
       if (rateLimits.length > 0) {
         current = toUsage(context, rateLimits)
         await writeShared($, sharedPath, tmpPath, stamp(lastResponseAt))
+        await warnLimits($, current, lastResponseAt)
       }
+      compactAt = await readCompactAt($)
       $.ui.invalidate('ui.render')
     }
     return result
@@ -309,15 +472,22 @@ export const register: Register = on => {
       fill: ctx.percent ?? 0,
       value: pct(ctx.percent),
       alt: [ctxUsed, kTokens(ctx.window)],
-      verbose: [`Used: ${ctxUsed} tokens`, `Window: ${kTokens(ctx.window)}`],
+      verbose: [
+        `Used: ${ctxUsed} tokens`,
+        `Window: ${kTokens(ctx.window)}${compactAt !== undefined ? ` · compacts at ${kTokens(compactAt)}` : ''}`,
+      ],
+      zone: CTX_ZONE,
+      ...(compactAt !== undefined && compactAt < ctx.window ? { mark: (compactAt / ctx.window) * 100 } : {}),
     }
 
     const elapsed = lastResponseAt === null ? undefined : Math.max(0, now - lastResponseAt)
-    const left = elapsed === undefined ? undefined : CACHE_TTL_MS - elapsed
+    const left = elapsed === undefined ? undefined : ttl - elapsed
     // What the next prompt costs for the context, in plain input-token
     // equivalents: with the cache alive, and once it has expired.
     const warm = ctx.tokens !== undefined ? (ctx.tokens * CACHE_READ_HUNDREDTHS) / 100 : undefined
-    const cold = ctx.tokens !== undefined ? (ctx.tokens * CACHE_WRITE_1H_HUNDREDTHS) / 100 : undefined
+    const cold = ctx.tokens !== undefined ? (ctx.tokens * writeHundredths(ttl)) / 100 : undefined
+    // Said only when it is not the 1 hour assumed.
+    const ttlNote = ttl === TTL_5M ? ' · 5m cache' : ''
     const cost = warm === undefined || cold === undefined ? '—' : `${kTokens(warm)} → ${kTokens(cold)}`
     const costVerbose =
       warm === undefined || cold === undefined ? 'Next prompt: n/a' : `${kTokens(warm)} now, ${kTokens(cold)} expired`
@@ -332,16 +502,16 @@ export const register: Register = on => {
               fill: 0,
               value: 'exp',
               alt: ['expired', cold === undefined ? '—' : `→ ${kTokens(cold)}`],
-              verbose: [`Expired ${duration(-left)} ago`, cold === undefined ? 'Next prompt: n/a' : `Next prompt: ${kTokens(cold)}`],
+              verbose: [`Expired ${duration(-left)} ago${ttlNote}`, cold === undefined ? 'Next prompt: n/a' : `Next prompt: ${kTokens(cold)}`],
             }
           : {
               key: 'cch',
               label: 'Cch',
-              level: (elapsed / CACHE_TTL_MS) * 100,
-              fill: (left / CACHE_TTL_MS) * 100,
+              level: (elapsed / ttl) * 100,
+              fill: (left / ttl) * 100,
               value: `${Math.ceil(left / 60_000)}m`,
               alt: [`${Math.ceil(left / 60_000)} min`, cost],
-              verbose: [`Expires in ${duration(left)}`, costVerbose],
+              verbose: [`Expires in ${duration(left)}${ttlNote}`, costVerbose],
             }
 
     const age = readAt === null ? '' : now - readAt < 60_000 ? 'now' : `${duration(now - readAt)} ago`
@@ -408,8 +578,18 @@ export const register: Register = on => {
           const text = face === 'alt' ? m.alt : face === 'name' ? NAMES[m.key] : m.verbose
           const graph = isTerminal ? (
             face === 'pill' ? (
-              <Box width="100%" height={1} backgroundColor="subtle" overflow="hidden">
+              <Box width="100%" height={1} backgroundColor="subtle" overflow="hidden" position="relative">
                 <Box width={`${Math.round(clamp(m.fill))}%`} height={1} backgroundColor={HUES[m.key]} />
+                {(m.zone ?? []).map(at => (
+                  <Box key={`zone-${m.key}-${at}`} position="absolute" top={0} left={0} width={`${at}%`} height={1} flexDirection="row" justifyContent="flex-end">
+                    <Text color={ZONE_TICK}>▕</Text>
+                  </Box>
+                ))}
+                {m.mark === undefined ? null : (
+                  <Box key={`mark-${m.key}`} position="absolute" top={0} left={0} width={`${Math.round(clamp(m.mark))}%`} height={1} flexDirection="row" justifyContent="flex-end">
+                    <Text color={MARK}>▕</Text>
+                  </Box>
+                )}
               </Box>
             ) : (
               <Text color={HUES[m.key]} wrap="truncate-end">{` ${text[0]} · ${text[1]}`}</Text>
