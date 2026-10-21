@@ -50,7 +50,7 @@ claude plugin test .
 
 ## Authorship
 
-Sole author: Luis Garcia (LG-Systems). See [AUTHORS.md](AUTHORS.md) for how the `Co-Authored-By: Claude` lines in the commit history should be read.
+Sole author: Luis Garcia (LG-Systems). See [AUTHORS.md](AUTHORS.md) for how the "Co-Authored-By" lines in the commit history should be read.
 
 ---
 
