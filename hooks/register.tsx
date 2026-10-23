@@ -38,6 +38,9 @@ type Meter = {
   // A stretch of the bar marked out, from and to, as shares of it (the
   // context's: the time to compact or hand over).
   zone?: readonly [number, number]
+  // Equal segments the bar is cut into, as a gauge for the pace of use (the
+  // week's: one per day).
+  segments?: number
 }
 
 const pickWindow = (limits: readonly SessionRateLimit[], kind: string): Window | null => {
@@ -110,6 +113,11 @@ const MARK = 'rgba(140,140,140,0.9)'
 const CTX_ZONE = [50, 75] as const
 const ZONE_FILL = 'rgba(212,167,44,0.22)'
 const ZONE_TICK = 'rgba(212,167,44,0.85)'
+// The faint dividers between a bar's segments, over the fill as on the track.
+const DIVIDER = 'rgba(140,140,140,0.45)'
+// The share of the bar at each divider: 7 segments, 6 dividers.
+const dividers = (segments: number | undefined) =>
+  segments === undefined ? [] : Array.from({ length: segments - 1 }, (_, i) => ((i + 1) / segments) * 100)
 
 // Desktop: one cell of the band is about 9.5 px (measured: 95 columns).
 const PX_PER_COLUMN = 9.5
@@ -179,6 +187,9 @@ const meterSvg = (width: number, m: Meter, face: Face) => {
           : m.zone
               .map(at => `<rect x="${(xAt(at) - 0.5).toFixed(1)}" y="${top - 2}" width="1" height="${BAR_HEIGHT + 4}" fill="${ZONE_TICK}" data-zone="${at}"/>`)
               .join('')) +
+        dividers(m.segments)
+          .map(at => `<rect x="${(xAt(at) - 0.5).toFixed(1)}" y="${top}" width="1" height="${BAR_HEIGHT}" fill="${DIVIDER}" data-divider="${at.toFixed(1)}"/>`)
+          .join('') +
         (m.mark === undefined
           ? ''
           : `<rect x="${(BAR_INSET + (clamp(m.mark) / 100) * barWidth - 0.75).toFixed(1)}" y="${top - 3}" width="1.5" height="${BAR_HEIGHT + 6}" rx="0.75" fill="${MARK}" data-mark="compact"/>`)
@@ -515,7 +526,7 @@ export const register: Register = on => {
             }
 
     const age = readAt === null ? '' : now - readAt < 60_000 ? 'now' : `${duration(now - readAt)} ago`
-    const resetMeter = (key: Key, label: string, w: Window | null, isWeek: boolean): Meter => {
+    const resetMeter = (key: Key, label: string, w: Window | null, isWeek: boolean, segments?: number): Meter => {
       const resetAt = w?.resetsAt ? Date.parse(w.resetsAt) : NaN
       const when = (ms: number) => (isWeek ? dayTime(ms) : clockTime(ms))
       // Past its reset time the window is back to zero, whatever was last read.
@@ -528,6 +539,7 @@ export const register: Register = on => {
           value: '0%',
           alt: ['reset', when(resetAt)],
           verbose: [`Reset ${isWeek ? 'on' : 'at'} ${when(resetAt)}`, 'awaiting a new reading'],
+          ...(segments === undefined ? {} : { segments }),
         }
       }
       const hasReset = Number.isFinite(resetAt)
@@ -542,6 +554,7 @@ export const register: Register = on => {
         verbose: hasReset
           ? [`Resets in ${duration(resetAt - now)}`, `${isWeek ? 'on' : 'at'} ${at}${age ? ` · ${age}` : ''}`]
           : ['No reading yet', ''],
+        ...(segments === undefined ? {} : { segments }),
       }
     }
 
@@ -549,7 +562,7 @@ export const register: Register = on => {
       ctxMeter,
       cchMeter,
       resetMeter('ses', 'Ses', usage.fiveHour, false),
-      resetMeter('wk', 'Wk', usage.week, true),
+      resetMeter('wk', 'Wk', usage.week, true, 7),
     ]
   }
 
@@ -583,6 +596,11 @@ export const register: Register = on => {
                 {(m.zone ?? []).map(at => (
                   <Box key={`zone-${m.key}-${at}`} position="absolute" top={0} left={0} width={`${at}%`} height={1} flexDirection="row" justifyContent="flex-end">
                     <Text color={ZONE_TICK}>▕</Text>
+                  </Box>
+                ))}
+                {dividers(m.segments).map(at => (
+                  <Box key={`divider-${m.key}-${at}`} position="absolute" top={0} left={0} width={`${Math.round(at)}%`} height={1} flexDirection="row" justifyContent="flex-end">
+                    <Text color={DIVIDER}>│</Text>
                   </Box>
                 ))}
                 {m.mark === undefined ? null : (

@@ -234,3 +234,22 @@ for (const surface of ['terminal', 'desktop'] as const) {
     }
   })
 }
+
+for (const surface of ['terminal', 'desktop'] as const) {
+  test(`the week bar is cut into 7 equal segments, one per day (${surface})`, async ($, on) => {
+    world(on)
+    await start($)
+    const ui = await mountBand($, surface)
+    if (surface === 'desktop') {
+      const svgs = (await ui.findAll({ type: 'Svg' })).map(props)
+      const wk = svgs[3]?.source ?? ''
+      const at = [...wk.matchAll(/data-divider="([\d.]+)"/g)].map(m => m[1])
+      expect(at).toEqual(['14.3', '28.6', '42.9', '57.1', '71.4', '85.7'])
+      // drawn over the fill
+      expect(wk.indexOf('data-divider')).toBeGreaterThan(wk.indexOf('fill="#2cb5a0"'))
+      for (const p of svgs.slice(0, 3)) expect(p.source).not.toContain('data-divider')
+    } else {
+      expect(await ui.findAll({ type: 'Text', text: '│' })).toHaveLength(6)
+    }
+  })
+}
