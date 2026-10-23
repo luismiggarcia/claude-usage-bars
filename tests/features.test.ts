@@ -361,3 +361,18 @@ test('a new prompt disarms the keep-alive', async ($, on) => {
   expect(forks).toHaveLength(0)
   expect(await ui.find({ type: 'Text', text: '1m' })).toBeDefined()
 })
+
+test('the keep-alive keeps the width of the value it replaces, so the pointer stays on it', async ($, on) => {
+  world(on, { store: { lastResponseAt: { s1: NOW - 30 * MIN } } })
+  await start($)
+  const ui = await mountBand($)
+  const valueWidths = async () =>
+    (await ui.findAll({ type: 'Box' }))
+      .map(b => (b as { props?: { width?: unknown; justifyContent?: string } }).props ?? {})
+      .filter(p => p.justifyContent === 'center' && typeof p.width === 'number')
+      .map(p => p.width)
+  expect(await valueWidths()).toEqual([3])
+  await pointerOnValue(ui, 'enter')
+  expect(await ui.find({ type: 'Text', text: '↻' })).toBeDefined()
+  expect(await valueWidths()).toEqual([3])
+})

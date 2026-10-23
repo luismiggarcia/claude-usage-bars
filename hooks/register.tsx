@@ -686,6 +686,7 @@ export const register: Register = on => {
           const isPinned = pinned.has(m.key) || (m.level !== undefined && m.level >= RED_BAND)
           const rest: Face = isPinned ? 'alt' : 'pill'
           const isOffering = m.keepAlive !== undefined && hoveredValue === m.key
+          const valueText = m.isArmed ? `${KEEP_ALIVE_GLYPH}${m.value}` : m.value
           const face: Face =
             hoveredLabel === m.key
               ? 'name'
@@ -751,14 +752,21 @@ export const register: Register = on => {
                 <Button key={`label-${m.key}`} label={m.label} plain dimColor onPress={() => onLabel(m.key)} />
               )}
               {bar}
-              <Box flexShrink={0} marginLeft={isTerminal ? 1 : 0} position="relative">
+              {/* The keep-alive keeps the value's width: under a narrower glyph the
+                  pointer would leave it, bring the minutes back, and flicker. */}
+              <Box
+                flexShrink={0}
+                marginLeft={isTerminal ? 1 : 0}
+                position="relative"
+                {...(m.keepAlive === undefined ? {} : { width: valueText.length, justifyContent: 'center' })}
+              >
                 {isOffering ? (
                   <Text color={HUES[m.key]} bold={!m.isArmed} dimColor={m.isArmed === true}>
                     {KEEP_ALIVE_GLYPH}
                   </Text>
                 ) : (
                   <Text color={valueColor} bold={level?.isBold === true}>
-                    {m.isArmed ? `${KEEP_ALIVE_GLYPH}${m.value}` : m.value}
+                    {valueText}
                   </Text>
                 )}
                 {Client && m.key === 'cch' ? (
