@@ -1,10 +1,10 @@
 import type { ClientModule } from 'claude-code'
 
-// An invisible region laid over one meter's graph or label: it reports the
+// An invisible region laid over one meter's graph, label or value: it reports the
 // pointer entering, leaving and clicking to the hooks module, which picks the
 // face the graph shows (pill, alternative, verbose or the label's full name)
 // and keeps the pins.
-type Props = { meter: string; part?: 'graph' | 'label' }
+type Props = { meter: string; part?: 'graph' | 'label' | 'value' }
 
 const Hit: ClientModule<Props, true> = (props, surface) => {
   if (surface.state === undefined) {

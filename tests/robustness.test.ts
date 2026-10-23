@@ -185,3 +185,59 @@ test('with no response yet the cache bar has no shade', async ($, on) => {
   const ui = await mountBand($)
   expect(props((await ui.findAll({ type: 'Svg' }))[1]).source).not.toContain('data-shade')
 })
+
+const pointerOnValue = (ui: Awaited<ReturnType<typeof mountBand>>, type: 'enter' | 'leave' | 'down') =>
+  ui.pointer({ type, x: 0, y: 0, ...(type === 'down' ? { button: 'left' as const } : {}), in: 'hit-value-cch' })
+
+test('in its last 10 minutes the cache value turns into a keep-alive under the pointer, and back', async ($, on) => {
+  world(on, { store: { s1: NOW - 55 * MIN } })
+  await start($)
+  const ui = await mountBand($)
+  expect(await ui.find({ type: 'Text', text: '5m' })).toBeDefined()
+  await pointerOnValue(ui, 'enter')
+  expect(await ui.find({ type: 'Text', text: '↻' })).toBeDefined()
+  const cch = props((await ui.findAll({ type: 'Svg' }))[1]).source ?? ''
+  expect(cch).toContain('data-face="keep"')
+  expect(cch).toContain('↻ Keep alive')
+  await pointerOnValue(ui, 'leave')
+  expect(await ui.find({ type: 'Text', text: '5m' })).toBeDefined()
+  expect(props((await ui.findAll({ type: 'Svg' }))[1]).source).toContain('data-face="pill"')
+})
+
+test('a click on the keep-alive forks the conversation and renews the countdown', async ($, on) => {
+  world(on, { store: { s1: NOW - 55 * MIN } })
+  const forks: string[] = []
+  on('model.fork', (_$, e) => {
+    forks.push(e.prompt)
+    return { value: { isAnswered: true, text: 'ok', usage: { input_tokens: 10, output_tokens: 2, cache_read_input_tokens: 90_000, cache_creation_input_tokens: 0 } } }
+  })
+  const toasts: string[] = []
+  on('ui.toast', (_$, e) => {
+    toasts.push(e.text)
+    return { value: undefined }
+  })
+  await start($)
+  const ui = await mountBand($)
+  await pointerOnValue(ui, 'enter')
+  await pointerOnValue(ui, 'down')
+  const said = () => toasts.find(t => !t.startsWith('Prompt cache expires'))
+  for (let i = 0; i < 10 && said() === undefined; i++) await new Promise(r => setTimeout(r, 5))
+  expect(forks).toHaveLength(1)
+  expect(said()).toBe('Prompt cache kept alive: 90k read from it')
+  expect(props((await ui.findAll({ type: 'Svg' }))[1]).alt).toContain('Expires in 1h 0m')
+})
+
+test('before its last 10 minutes the cache value stays as it is and a click forks nothing', async ($, on) => {
+  world(on, { store: { s1: NOW - 30 * MIN } })
+  const forks: string[] = []
+  on('model.fork', (_$, e) => {
+    forks.push(e.prompt)
+    return { value: { isAnswered: true, text: 'ok', usage: { input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 } } }
+  })
+  await start($)
+  const ui = await mountBand($)
+  await pointerOnValue(ui, 'enter')
+  expect(await ui.find({ type: 'Text', text: '30m' })).toBeDefined()
+  await pointerOnValue(ui, 'down')
+  expect(forks).toHaveLength(0)
+})

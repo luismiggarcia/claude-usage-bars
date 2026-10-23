@@ -44,6 +44,9 @@ type Meter = {
   // The start of the bar shaded, up to this share of it, under the fill: it
   // shows once the fill has shrunk into it (the cache's last minutes).
   shade?: number
+  // The keep-alive the value turns into under the pointer (the cache's, in
+  // its last minutes): the text the graph shows meanwhile.
+  keepAlive?: [string, string]
   // Where the window is now, as a share of the bar: how much of its time has
   // gone, to read the use against.
   now?: number
@@ -122,6 +125,10 @@ const ZONE_TICK = 'rgba(212,167,44,0.85)'
 // The cache's last minutes, shaded as the context's zone: 10 of the hour, or
 // the last 1 of a 5-minute cache.
 const cacheShadeMs = (ttlMs: number) => (ttlMs === TTL_5M ? 60_000 : 10 * 60_000)
+// The keep-alive: one tool-less fork of the main conversation, which the API
+// serves from its cache and so renews it, its reply kept out of the transcript.
+const KEEP_ALIVE_PROMPT = 'Keep-alive ping for the prompt cache. Reply with just: ok'
+const KEEP_ALIVE_GLYPH = '↻'
 // The faint dividers between a bar's segments, over the fill as on the track.
 const DIVIDER = 'rgba(140,140,140,0.45)'
 // The share of the bar at each divider: 7 segments, 6 dividers.
@@ -164,7 +171,7 @@ const dayTime = (ms: number) => `${DAYS[new Date(ms).getDay()]} ${clockTime(ms)}
 
 // What a meter shows in place of its bar: the pill, its alternative text, or
 // the verbose form of that text.
-type Face = 'pill' | 'alt' | 'verbose' | 'name'
+type Face = 'pill' | 'alt' | 'verbose' | 'name' | 'keep'
 
 // The label's tooltip: its name in full, drawn in the graph's place while the
 // pointer is on the label.
@@ -214,7 +221,7 @@ const meterSvg = (width: number, m: Meter, face: Face) => {
         (m.mark === undefined
           ? ''
           : `<rect x="${(BAR_INSET + (clamp(m.mark) / 100) * barWidth - 0.75).toFixed(1)}" y="${top - 3}" width="1.5" height="${BAR_HEIGHT + 6}" rx="0.75" fill="${MARK}" data-mark="compact"/>`)
-      : lines(face === 'alt' ? m.alt : face === 'name' ? NAMES[m.key] : m.verbose)
+      : lines(face === 'alt' ? m.alt : face === 'name' ? NAMES[m.key] : face === 'keep' && m.keepAlive ? m.keepAlive : m.verbose)
   return (
     `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${FRAME_HEIGHT}" viewBox="0 0 ${width} ${FRAME_HEIGHT}" data-face="${face}">` +
     `<style>text{font:600 9px -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;text-anchor:middle}.s{font-weight:400;opacity:.8}</style>` +
@@ -289,6 +296,34 @@ async function readCompactAt($: any): Promise<number | undefined> {
   return breakdown?.isAutoCompactEnabled ? breakdown.autoCompactThreshold : undefined
 }
 
+// The keep-alive's fork, and a toast of how it went: resolves to when the
+// cache was renewed, or null.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function forkKeepAlive($: any, sessionId: string | null): Promise<number | null> {
+  try {
+    const r = await $.model.fork({ prompt: KEEP_ALIVE_PROMPT })
+    if (!r.isAnswered) {
+      warn($, `Keep-alive failed: ${r.reason}${r.reason === 'api-error' && r.status ? ` ${r.status}` : ''}`, false, 'Prompt cache')
+      return null
+    }
+    // Read from the cache or written to it afresh, the prefix is cached now.
+    const at: number = await $.clock.now()
+    await saveLastResponse($, sessionId, at)
+    const read = r.usage.cache_read_input_tokens
+    const total = r.usage.input_tokens + read + r.usage.cache_creation_input_tokens
+    warn(
+      $,
+      read >= total * 0.8 ? `Prompt cache kept alive: ${kTokens(read)} read from it` : `Prompt cache had lapsed: ${kTokens(total - read)} written again`,
+      false,
+      'Prompt cache',
+    )
+    return at
+  } catch {
+    warn($, 'Keep-alive failed', false, 'Prompt cache')
+    return null
+  }
+}
+
 // A toast; an urgent one also as a notification, for a person away from the window.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function warn($: any, text: string, isUrgent: boolean, title: string): void {
@@ -356,6 +391,8 @@ export const register: Register = on => {
   const pinned = new Set<Key>()
   let hovered: Key | null = null
   let hoveredLabel: Key | null = null
+  let hoveredValue: Key | null = null
+  let isKeepingAlive = false
   const isKey = (k: unknown): k is Key => k === 'ctx' || k === 'cch' || k === 'ses' || k === 'wk'
   const toggle = (k: Key) => {
     if (pinned.has(k)) pinned.delete(k)
@@ -391,12 +428,31 @@ export const register: Register = on => {
     return `Prompt cache expires in ${duration(left)}${cost}`
   }
 
+  // The keep-alive is offered in the cache's last minutes, while the session
+  // waits for a prompt.
+  const canKeepAlive = (now: number) => {
+    if (isTurnRunning || isKeepingAlive || lastResponseAt === null) return false
+    const left = lastResponseAt + ttl - now
+    return left > 0 && left <= cacheShadeMs(ttl)
+  }
+
   // The invisible regions over the graphs report the pointer here.
   on('ui.message', async ($, e, next) => {
     const data = e.data as { meter?: unknown; part?: unknown; type?: unknown } | null
     if (e.module.endsWith('hit.tsx') && data && isKey(data.meter)) {
       const isLabel = data.part === 'label'
-      if (data.type === 'enter') {
+      if (data.part === 'value') {
+        if (data.type === 'enter') hoveredValue = data.meter
+        else if (data.type === 'leave') hoveredValue = hoveredValue === data.meter ? null : hoveredValue
+        else if (data.type === 'click' && data.meter === 'cch' && canKeepAlive(await $.clock.now())) {
+          isKeepingAlive = true
+          void forkKeepAlive($, sessionId).then(at => {
+            if (at !== null) lastResponseAt = at
+            isKeepingAlive = false
+            $.ui.invalidate('ui.render')
+          })
+        }
+      } else if (data.type === 'enter') {
         if (isLabel) hoveredLabel = data.meter
         else hovered = data.meter
       } else if (data.type === 'leave') {
@@ -541,10 +597,11 @@ export const register: Register = on => {
               label: 'Cch',
               level: (elapsed / ttl) * 100,
               fill: (left / ttl) * 100,
-              value: `${Math.ceil(left / 60_000)}m`,
+              value: isKeepingAlive ? '…' : `${Math.ceil(left / 60_000)}m`,
               alt: [`${Math.ceil(left / 60_000)} min`, cost],
               verbose: [`Expires in ${duration(left)}${ttlNote}`, costVerbose],
               shade: (cacheShadeMs(ttl) / ttl) * 100,
+              ...(canKeepAlive(now) ? { keepAlive: [`${KEEP_ALIVE_GLYPH} Keep alive`, warm === undefined ? 'renews the cache' : `costs ~${kTokens(warm)}`] as [string, string] } : {}),
             }
 
     const age = readAt === null ? '' : now - readAt < 60_000 ? 'now' : `${duration(now - readAt)} ago`
@@ -610,9 +667,18 @@ export const register: Register = on => {
           const valueColor = m.level === undefined ? 'inactive' : (level?.color ?? HUES[m.key])
           const isPinned = pinned.has(m.key) || (m.level !== undefined && m.level >= RED_BAND)
           const rest: Face = isPinned ? 'alt' : 'pill'
+          const isOffering = m.keepAlive !== undefined && hoveredValue === m.key
           const face: Face =
-            hoveredLabel === m.key ? 'name' : hovered === m.key ? (rest === 'alt' ? 'verbose' : 'alt') : rest
-          const text = face === 'alt' ? m.alt : face === 'name' ? NAMES[m.key] : m.verbose
+            hoveredLabel === m.key
+              ? 'name'
+              : isOffering
+                ? 'keep'
+                : hovered === m.key
+                  ? rest === 'alt'
+                    ? 'verbose'
+                    : 'alt'
+                  : rest
+          const text = face === 'alt' ? m.alt : face === 'name' ? NAMES[m.key] : face === 'keep' && m.keepAlive ? m.keepAlive : m.verbose
           const graph = isTerminal ? (
             face === 'pill' ? (
               <Box width="100%" height={1} backgroundColor="subtle" overflow="hidden" position="relative">
@@ -667,8 +733,15 @@ export const register: Register = on => {
                 <Button key={`label-${m.key}`} label={m.label} plain dimColor onPress={() => onLabel(m.key)} />
               )}
               {bar}
-              <Box flexShrink={0} marginLeft={isTerminal ? 1 : 0}>
-                <Text color={valueColor} bold={level?.isBold === true}>{m.value}</Text>
+              <Box flexShrink={0} marginLeft={isTerminal ? 1 : 0} position="relative">
+                <Text color={isOffering ? HUES[m.key] : valueColor} bold={isOffering || level?.isBold === true}>
+                  {isOffering ? KEEP_ALIVE_GLYPH : m.value}
+                </Text>
+                {Client && m.key === 'cch' ? (
+                  <Box position="absolute" top={0} left={0} right={0} bottom={0}>
+                    <Client key={`hit-value-${m.key}`} module="./hit.tsx" props={{ meter: m.key, part: 'value' }} width="100%" height={1} />
+                  </Box>
+                ) : null}
               </Box>
             </Box>
           )
