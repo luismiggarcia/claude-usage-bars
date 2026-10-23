@@ -119,7 +119,8 @@ const ZONE_TICK = 'rgba(212,167,44,0.85)'
 // The faint dividers between a bar's segments, over the fill as on the track.
 const DIVIDER = 'rgba(140,140,140,0.45)'
 // The share of the bar at each divider: 7 segments, 6 dividers.
-// The tick for where the window is now: taller than the dividers, solid.
+// The arrow for where the window is now: a small triangle under the bar,
+// pointing up at it.
 const NOW_TICK = 'rgba(110,110,110,0.95)'
 const WEEK = 7 * 24 * 60 * 60_000
 const dividers = (segments: number | undefined) =>
@@ -198,7 +199,7 @@ const meterSvg = (width: number, m: Meter, face: Face) => {
           .join('') +
         (m.now === undefined
           ? ''
-          : `<rect x="${(xAt(m.now) - 0.75).toFixed(1)}" y="${top - 3}" width="1.5" height="${BAR_HEIGHT + 6}" rx="0.75" fill="${NOW_TICK}" data-now="${m.now.toFixed(1)}"/>`) +
+          : `<path d="M${xAt(m.now).toFixed(1)} ${top + BAR_HEIGHT + 1}l3 4.5h-6z" fill="${NOW_TICK}" data-now="${m.now.toFixed(1)}"/>`) +
         (m.mark === undefined
           ? ''
           : `<rect x="${(BAR_INSET + (clamp(m.mark) / 100) * barWidth - 0.75).toFixed(1)}" y="${top - 3}" width="1.5" height="${BAR_HEIGHT + 6}" rx="0.75" fill="${MARK}" data-mark="compact"/>`)
