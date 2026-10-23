@@ -1,6 +1,6 @@
 {
   "name": "usage-bars",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Context, cache, 5-hour session and weekly usage meters above the prompt",
   "author": {
     "name": "LG-Systems"

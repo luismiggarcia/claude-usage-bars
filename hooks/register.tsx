@@ -44,9 +44,10 @@ type Meter = {
   // The start of the bar shaded, up to this share of it, under the fill: it
   // shows once the fill has shrunk into it (the cache's last minutes).
   shade?: number
-  // The keep-alive the value turns into under the pointer (the cache's, in
-  // its last minutes): the text the graph shows meanwhile.
+  // The keep-alive the value turns into under the pointer (the cache's, while
+  // it lives): the text the graph shows meanwhile, and whether it is armed.
   keepAlive?: [string, string]
+  isArmed?: boolean
   // Where the window is now, as a share of the bar: how much of its time has
   // gone, to read the use against.
   now?: number
@@ -127,6 +128,9 @@ const ZONE_TICK = 'rgba(212,167,44,0.85)'
 const cacheShadeMs = (ttlMs: number) => (ttlMs === TTL_5M ? 60_000 : 10 * 60_000)
 // The keep-alive: one tool-less fork of the main conversation, which the API
 // serves from its cache and so renews it, its reply kept out of the transcript.
+// A click arms it; it runs once, this long before the cache would expire (the
+// last 2 minutes of the hour, the last 1 of a 5-minute cache), and disarms.
+const keepAliveLeadMs = (ttlMs: number) => (ttlMs === TTL_5M ? 60_000 : 2 * 60_000)
 const KEEP_ALIVE_PROMPT = 'Keep-alive ping for the prompt cache. Reply with just: ok'
 const KEEP_ALIVE_GLYPH = '↻'
 // The faint dividers between a bar's segments, over the fill as on the track.
@@ -393,6 +397,7 @@ export const register: Register = on => {
   let hoveredLabel: Key | null = null
   let hoveredValue: Key | null = null
   let isKeepingAlive = false
+  let isArmed = false
   const isKey = (k: unknown): k is Key => k === 'ctx' || k === 'cch' || k === 'ses' || k === 'wk'
   const toggle = (k: Key) => {
     if (pinned.has(k)) pinned.delete(k)
@@ -416,7 +421,7 @@ export const register: Register = on => {
   // The cache about to expire while the session waits for a prompt: what to
   // say, once per response, or null.
   const cacheWarning = (now: number): string | null => {
-    if (isTurnRunning || lastResponseAt === null || cacheWarnedFor === lastResponseAt) return null
+    if (isTurnRunning || isArmed || lastResponseAt === null || cacheWarnedFor === lastResponseAt) return null
     const left = lastResponseAt + ttl - now
     if (left <= 0 || left > cacheWarnBefore(ttl)) return null
     cacheWarnedFor = lastResponseAt
@@ -428,13 +433,9 @@ export const register: Register = on => {
     return `Prompt cache expires in ${duration(left)}${cost}`
   }
 
-  // The keep-alive is offered in the cache's last minutes, while the session
-  // waits for a prompt.
-  const canKeepAlive = (now: number) => {
-    if (isTurnRunning || isKeepingAlive || lastResponseAt === null) return false
-    const left = lastResponseAt + ttl - now
-    return left > 0 && left <= cacheShadeMs(ttl)
-  }
+  // The keep-alive is offered while the cache lives, and armed by a click.
+  const isCacheAlive = (now: number) => lastResponseAt !== null && lastResponseAt + ttl > now
+  const keepAliveAt = () => (lastResponseAt === null ? null : lastResponseAt + ttl - keepAliveLeadMs(ttl))
 
   // The invisible regions over the graphs report the pointer here.
   on('ui.message', async ($, e, next) => {
@@ -444,14 +445,8 @@ export const register: Register = on => {
       if (data.part === 'value') {
         if (data.type === 'enter') hoveredValue = data.meter
         else if (data.type === 'leave') hoveredValue = hoveredValue === data.meter ? null : hoveredValue
-        else if (data.type === 'click' && data.meter === 'cch' && canKeepAlive(await $.clock.now())) {
-          isKeepingAlive = true
-          void forkKeepAlive($, sessionId).then(at => {
-            if (at !== null) lastResponseAt = at
-            isKeepingAlive = false
-            $.ui.invalidate('ui.render')
-          })
-        }
+        else if (data.type === 'click' && data.meter === 'cch' && !isArmed && !isKeepingAlive && isCacheAlive(await $.clock.now()))
+          isArmed = true
       } else if (data.type === 'enter') {
         if (isLabel) hoveredLabel = data.meter
         else hovered = data.meter
@@ -485,6 +480,18 @@ export const register: Register = on => {
       adopt(await readShared($, sharedPath))
       ttl = (await readTtl($)) ?? ttl
       const now = await $.clock.now()
+      // The armed keep-alive, due: run it once, then the button is back.
+      const dueAt = keepAliveAt()
+      if (isArmed && !isTurnRunning && dueAt !== null && now >= dueAt) {
+        isArmed = false
+        if (isCacheAlive(now)) {
+          isKeepingAlive = true
+          $.ui.invalidate('ui.render')
+          const at = await forkKeepAlive($, sessionId)
+          if (at !== null) lastResponseAt = at
+          isKeepingAlive = false
+        } else warn($, 'Keep-alive missed: the prompt cache had already expired', false, 'Prompt cache')
+      }
       const cacheText = cacheWarning(now)
       if (cacheText !== null) warn($, cacheText, true, 'Prompt cache')
       await warnLimits($, current, now)
@@ -504,7 +511,11 @@ export const register: Register = on => {
   })
 
   on('turn.start', async ($, e, next) => {
-    if (!e.agentId) isTurnRunning = true
+    // A new prompt renews the cache itself: an armed keep-alive is not needed.
+    if (!e.agentId) {
+      isTurnRunning = true
+      isArmed = false
+    }
     return next(e)
   })
 
@@ -601,7 +612,14 @@ export const register: Register = on => {
               alt: [`${Math.ceil(left / 60_000)} min`, cost],
               verbose: [`Expires in ${duration(left)}${ttlNote}`, costVerbose],
               shade: (cacheShadeMs(ttl) / ttl) * 100,
-              ...(canKeepAlive(now) ? { keepAlive: [`${KEEP_ALIVE_GLYPH} Keep alive`, warm === undefined ? 'renews the cache' : `costs ~${kTokens(warm)}`] as [string, string] } : {}),
+              ...(isKeepingAlive
+                ? {}
+                : {
+                    keepAlive: (isArmed
+                      ? [`${KEEP_ALIVE_GLYPH} Keep-alive armed`, `runs at ${clockTime(now + left - keepAliveLeadMs(ttl))}`]
+                      : [`${KEEP_ALIVE_GLYPH} Keep alive`, warm === undefined ? `at ${duration(keepAliveLeadMs(ttl))} left` : `at ${duration(keepAliveLeadMs(ttl))} left · ~${kTokens(warm)}`]) as [string, string],
+                    isArmed,
+                  }),
             }
 
     const age = readAt === null ? '' : now - readAt < 60_000 ? 'now' : `${duration(now - readAt)} ago`
@@ -734,9 +752,15 @@ export const register: Register = on => {
               )}
               {bar}
               <Box flexShrink={0} marginLeft={isTerminal ? 1 : 0} position="relative">
-                <Text color={isOffering ? HUES[m.key] : valueColor} bold={isOffering || level?.isBold === true}>
-                  {isOffering ? KEEP_ALIVE_GLYPH : m.value}
-                </Text>
+                {isOffering ? (
+                  <Text color={HUES[m.key]} bold={!m.isArmed} dimColor={m.isArmed === true}>
+                    {KEEP_ALIVE_GLYPH}
+                  </Text>
+                ) : (
+                  <Text color={valueColor} bold={level?.isBold === true}>
+                    {m.isArmed ? `${KEEP_ALIVE_GLYPH}${m.value}` : m.value}
+                  </Text>
+                )}
                 {Client && m.key === 'cch' ? (
                   <Box position="absolute" top={0} left={0} right={0} bottom={0}>
                     <Client key={`hit-value-${m.key}`} module="./hit.tsx" props={{ meter: m.key, part: 'value' }} width="100%" height={1} />

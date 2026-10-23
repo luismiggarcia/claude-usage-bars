@@ -296,3 +296,68 @@ for (const surface of ['terminal', 'desktop'] as const) {
     }
   })
 }
+
+const pointerOnValue = (ui: Awaited<ReturnType<typeof mountBand>>, type: 'enter' | 'leave' | 'down') =>
+  ui.pointer({ type, x: 0, y: 0, ...(type === 'down' ? { button: 'left' as const } : {}), in: 'hit-value-cch' })
+const forksOf = (on: On) => {
+  const forks: string[] = []
+  on('model.fork', (_$, e) => {
+    forks.push(e.prompt)
+    return { value: { isAnswered: true, text: 'ok', usage: { input_tokens: 10, output_tokens: 2, cache_read_input_tokens: 90_000, cache_creation_input_tokens: 0 } } }
+  })
+  return forks
+}
+
+test('while the cache lives its value turns into a keep-alive under the pointer, and back', async ($, on) => {
+  world(on, { store: { lastResponseAt: { s1: NOW - 30 * MIN } } })
+  await start($)
+  const ui = await mountBand($)
+  await pointerOnValue(ui, 'enter')
+  expect(await ui.find({ type: 'Text', text: '↻' })).toBeDefined()
+  const cch = props((await ui.findAll({ type: 'Svg' }))[1]).source ?? ''
+  expect(cch).toContain('data-face="keep"')
+  expect(cch).toContain('↻ Keep alive')
+  await pointerOnValue(ui, 'leave')
+  expect(await ui.find({ type: 'Text', text: '30m' })).toBeDefined()
+})
+
+test('a click arms the keep-alive, which runs once 2 minutes before expiry and disarms', async ($, on) => {
+  const { clock, toasts } = world(on, { store: { lastResponseAt: { s1: NOW - 30 * MIN } } })
+  const forks = forksOf(on)
+  await start($)
+  const ui = await mountBand($)
+  await pointerOnValue(ui, 'enter')
+  await pointerOnValue(ui, 'down')
+  expect(forks).toHaveLength(0)
+  expect(props((await ui.findAll({ type: 'Svg' }))[1]).source).toContain('↻ Keep-alive armed')
+  // disabled: a second click arms nothing more
+  await pointerOnValue(ui, 'down')
+  await pointerOnValue(ui, 'leave')
+  expect(await ui.find({ type: 'Text', text: '↻30m' })).toBeDefined()
+  // not yet at 3 minutes left
+  await clock.advance(27 * MIN)
+  expect(forks).toHaveLength(0)
+  // the warning of the cache about to expire is not given while armed
+  expect(toasts.some(t => t.startsWith('Prompt cache expires'))).toBe(false)
+  await clock.advance(1 * MIN + 30_000)
+  expect(forks).toHaveLength(1)
+  expect(toasts).toContain('Prompt cache kept alive: 90k read from it')
+  // the countdown starts again, and the button is back
+  expect(await ui.find({ type: 'Text', text: '60m' })).toBeDefined()
+  await clock.advance(58 * MIN)
+  expect(forks).toHaveLength(1)
+})
+
+test('a new prompt disarms the keep-alive', async ($, on) => {
+  const { clock } = world(on, { store: { lastResponseAt: { s1: NOW - 30 * MIN } } })
+  const forks = forksOf(on)
+  await start($)
+  const ui = await mountBand($)
+  await pointerOnValue(ui, 'down')
+  await $.turn.start({ turnId: 't2', prompt: 'hi' } as never)
+  await respond($)
+  // the turn renewed the cache; past where the keep-alive would now run
+  await clock.advance(59 * MIN)
+  expect(forks).toHaveLength(0)
+  expect(await ui.find({ type: 'Text', text: '1m' })).toBeDefined()
+})
