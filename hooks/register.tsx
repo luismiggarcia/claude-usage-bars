@@ -39,7 +39,7 @@ type Meter = {
   // context's: the time to compact or hand over).
   zone?: readonly [number, number]
   // Equal segments the bar is cut into, as a gauge for the pace of use (the
-  // week's: one per day).
+  // session's: one per hour; the week's: one per day).
   segments?: number
   // Where the window is now, as a share of the bar: how much of its time has
   // gone, to read the use against.
@@ -122,6 +122,7 @@ const DIVIDER = 'rgba(140,140,140,0.45)'
 // The arrow for where the window is now: a small triangle under the bar,
 // pointing up at it.
 const NOW_TICK = 'rgba(110,110,110,0.95)'
+const FIVE_HOURS = 5 * 60 * 60_000
 const WEEK = 7 * 24 * 60 * 60_000
 const dividers = (segments: number | undefined) =>
   segments === undefined ? [] : Array.from({ length: segments - 1 }, (_, i) => ((i + 1) / segments) * 100)
@@ -573,7 +574,7 @@ export const register: Register = on => {
     return [
       ctxMeter,
       cchMeter,
-      resetMeter('ses', 'Ses', usage.fiveHour, false),
+      resetMeter('ses', 'Ses', usage.fiveHour, false, 5, FIVE_HOURS),
       resetMeter('wk', 'Wk', usage.week, true, 7, WEEK),
     ]
   }

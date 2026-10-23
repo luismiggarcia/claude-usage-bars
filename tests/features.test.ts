@@ -230,7 +230,8 @@ for (const surface of ['terminal', 'desktop'] as const) {
         .map(b => (b as { props?: { width?: unknown; position?: string } }).props ?? {})
         .filter(p => p.position === 'absolute' && (p.width === '50%' || p.width === '75%'))
         .map(p => p.width)
-      expect(zones).toEqual(['50%', '75%'])
+      // the context's come first (the session's arrow sits at 50% too)
+      expect(zones.slice(0, 2)).toEqual(['50%', '75%'])
     }
   })
 }
@@ -247,9 +248,10 @@ for (const surface of ['terminal', 'desktop'] as const) {
       expect(at).toEqual(['14.3', '28.6', '42.9', '57.1', '71.4', '85.7'])
       // drawn over the fill
       expect(wk.indexOf('data-divider')).toBeGreaterThan(wk.indexOf('fill="#2cb5a0"'))
-      for (const p of svgs.slice(0, 3)) expect(p.source).not.toContain('data-divider')
+      for (const p of svgs.slice(0, 2)) expect(p.source).not.toContain('data-divider')
     } else {
-      expect(await ui.findAll({ type: 'Text', text: '│' })).toHaveLength(6)
+      // with the session's 4
+      expect(await ui.findAll({ type: 'Text', text: '│' })).toHaveLength(10)
     }
   })
 }
@@ -263,13 +265,34 @@ for (const surface of ['terminal', 'desktop'] as const) {
     if (surface === 'desktop') {
       const svgs = (await ui.findAll({ type: 'Svg' })).map(props)
       expect(svgs[3]?.source).toContain('data-now="64.6"')
-      for (const p of svgs.slice(0, 3)) expect(p.source).not.toContain('data-now')
+      for (const p of svgs.slice(0, 2)) expect(p.source).not.toContain('data-now')
     } else {
-      expect(await ui.findAll({ type: 'Text', text: '┃' })).toHaveLength(1)
+      // with the session's
+      expect(await ui.findAll({ type: 'Text', text: '┃' })).toHaveLength(2)
       const now = (await ui.findAll({ type: 'Box' }))
         .map(b => (b as { props?: { width?: unknown; position?: string } }).props ?? {})
         .filter(p => p.position === 'absolute' && p.width === '65%')
       expect(now).toHaveLength(1)
+    }
+  })
+}
+
+for (const surface of ['terminal', 'desktop'] as const) {
+  test(`the session bar is cut into 5 hours and marks how much of them has gone (${surface})`, async ($, on) => {
+    world(on)
+    await start($)
+    const ui = await mountBand($, surface)
+    // 2.5 h left of 5: half gone
+    if (surface === 'desktop') {
+      const ses = (await ui.findAll({ type: 'Svg' })).map(props)[2]?.source ?? ''
+      expect([...ses.matchAll(/data-divider="([\d.]+)"/g)].map(m => m[1])).toEqual(['20.0', '40.0', '60.0', '80.0'])
+      expect(ses).toContain('data-now="50.0"')
+    } else {
+      const widths = (await ui.findAll({ type: 'Box' }))
+        .map(b => (b as { props?: { width?: unknown; position?: string } }).props ?? {})
+        .filter(p => p.position === 'absolute')
+        .map(p => p.width)
+      for (const w of ['20%', '40%', '60%', '80%']) expect(widths).toContain(w)
     }
   })
 }
