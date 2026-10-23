@@ -72,7 +72,7 @@ for (const surface of ['terminal', 'desktop'] as const) {
       expect(wk?.source).toContain('<text x="73.5" y="8"')
       // at rest: pills in their own hue; the red-band week shows its alternative text by itself
       expect(/<rect[^>]*\/><rect[^>]*fill="(#[0-9a-f]{6})"/.exec(ctx?.source ?? '')?.[1]).toBe('#4f8ff7')
-      expect(/<rect[^>]*\/><rect[^>]*fill="(#[0-9a-f]{6})"/.exec(cch?.source ?? '')?.[1]).toBe('#e07bb5')
+      expect(/<(?:rect|path)[^>]*\/><rect[^>]*fill="(#[0-9a-f]{6})"/.exec(cch?.source ?? '')?.[1]).toBe('#e07bb5')
       expect([await faceOf(0), await faceOf(1), await faceOf(2), await faceOf(3)]).toEqual(['pill', 'pill', 'pill', 'alt'])
       expect(wk?.source).toContain(`>${day(WK_RESET)} ${hhmm(WK_RESET)}</text>`)
       expect(ses?.alt).toBe(`Resets in 2h 30m. at ${hhmm(SES_RESET)} · now`)

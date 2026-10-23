@@ -169,3 +169,19 @@ test('each response in the middle of a long turn renews the cache', async ($, on
   const ui = await mountBand($)
   expect(await ui.find({ type: 'Text', text: '55m' })).toBeDefined()
 })
+
+test('the cache bar shades its last 10 minutes, under the fill', async ($, on) => {
+  world(on, { store: { s1: NOW - 50 * MIN } })
+  await start($)
+  const ui = await mountBand($)
+  const cch = props((await ui.findAll({ type: 'Svg' }))[1]).source ?? ''
+  expect(cch).toContain('data-shade="16.7"')
+  expect(cch.indexOf('data-shade')).toBeLessThan(cch.indexOf('fill="#e07bb5"'))
+})
+
+test('with no response yet the cache bar has no shade', async ($, on) => {
+  world(on)
+  await start($)
+  const ui = await mountBand($)
+  expect(props((await ui.findAll({ type: 'Svg' }))[1]).source).not.toContain('data-shade')
+})

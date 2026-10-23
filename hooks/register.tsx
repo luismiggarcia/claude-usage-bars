@@ -41,6 +41,9 @@ type Meter = {
   // Equal segments the bar is cut into, as a gauge for the pace of use (the
   // session's: one per hour; the week's: one per day).
   segments?: number
+  // The start of the bar shaded, up to this share of it, under the fill: it
+  // shows once the fill has shrunk into it (the cache's last minutes).
+  shade?: number
   // Where the window is now, as a share of the bar: how much of its time has
   // gone, to read the use against.
   now?: number
@@ -116,6 +119,9 @@ const MARK = 'rgba(140,140,140,0.9)'
 const CTX_ZONE = [50, 75] as const
 const ZONE_FILL = 'rgba(212,167,44,0.22)'
 const ZONE_TICK = 'rgba(212,167,44,0.85)'
+// The cache's last minutes, shaded as the context's zone: 10 of the hour, or
+// the last 1 of a 5-minute cache.
+const cacheShadeMs = (ttlMs: number) => (ttlMs === TTL_5M ? 60_000 : 10 * 60_000)
 // The faint dividers between a bar's segments, over the fill as on the track.
 const DIVIDER = 'rgba(140,140,140,0.45)'
 // The share of the bar at each divider: 7 segments, 6 dividers.
@@ -186,6 +192,10 @@ const meterSvg = (width: number, m: Meter, face: Face) => {
   const body =
     face === 'pill'
       ? `<rect x="${BAR_INSET}" y="${top}" width="${barWidth}" height="${BAR_HEIGHT}" rx="${r}" fill="${TRACK}"/>` +
+        // rounded at the start, as the track, and square at its end
+        (m.shade === undefined
+          ? ''
+          : `<path d="M${BAR_INSET + r} ${top}h${Math.max(0, xAt(m.shade) - BAR_INSET - r).toFixed(1)}v${BAR_HEIGHT}H${BAR_INSET + r}a${r} ${r} 0 0 1 0 -${BAR_HEIGHT}z" fill="${ZONE_FILL}" data-shade="${m.shade.toFixed(1)}"/>`) +
         (m.zone === undefined
           ? ''
           : `<rect x="${xAt(m.zone[0]).toFixed(1)}" y="${top}" width="${(xAt(m.zone[1]) - xAt(m.zone[0])).toFixed(1)}" height="${BAR_HEIGHT}" fill="${ZONE_FILL}" data-zone="band"/>`) +
@@ -534,6 +544,7 @@ export const register: Register = on => {
               value: `${Math.ceil(left / 60_000)}m`,
               alt: [`${Math.ceil(left / 60_000)} min`, cost],
               verbose: [`Expires in ${duration(left)}${ttlNote}`, costVerbose],
+              shade: (cacheShadeMs(ttl) / ttl) * 100,
             }
 
     const age = readAt === null ? '' : now - readAt < 60_000 ? 'now' : `${duration(now - readAt)} ago`
