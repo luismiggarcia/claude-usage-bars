@@ -41,6 +41,9 @@ type Meter = {
   // Equal segments the bar is cut into, as a gauge for the pace of use (the
   // week's: one per day).
   segments?: number
+  // Where the window is now, as a share of the bar: how much of its time has
+  // gone, to read the use against.
+  now?: number
 }
 
 const pickWindow = (limits: readonly SessionRateLimit[], kind: string): Window | null => {
@@ -116,6 +119,9 @@ const ZONE_TICK = 'rgba(212,167,44,0.85)'
 // The faint dividers between a bar's segments, over the fill as on the track.
 const DIVIDER = 'rgba(140,140,140,0.45)'
 // The share of the bar at each divider: 7 segments, 6 dividers.
+// The tick for where the window is now: taller than the dividers, solid.
+const NOW_TICK = 'rgba(110,110,110,0.95)'
+const WEEK = 7 * 24 * 60 * 60_000
 const dividers = (segments: number | undefined) =>
   segments === undefined ? [] : Array.from({ length: segments - 1 }, (_, i) => ((i + 1) / segments) * 100)
 
@@ -190,6 +196,9 @@ const meterSvg = (width: number, m: Meter, face: Face) => {
         dividers(m.segments)
           .map(at => `<rect x="${(xAt(at) - 0.5).toFixed(1)}" y="${top}" width="1" height="${BAR_HEIGHT}" fill="${DIVIDER}" data-divider="${at.toFixed(1)}"/>`)
           .join('') +
+        (m.now === undefined
+          ? ''
+          : `<rect x="${(xAt(m.now) - 0.75).toFixed(1)}" y="${top - 3}" width="1.5" height="${BAR_HEIGHT + 6}" rx="0.75" fill="${NOW_TICK}" data-now="${m.now.toFixed(1)}"/>`) +
         (m.mark === undefined
           ? ''
           : `<rect x="${(BAR_INSET + (clamp(m.mark) / 100) * barWidth - 0.75).toFixed(1)}" y="${top - 3}" width="1.5" height="${BAR_HEIGHT + 6}" rx="0.75" fill="${MARK}" data-mark="compact"/>`)
@@ -526,7 +535,7 @@ export const register: Register = on => {
             }
 
     const age = readAt === null ? '' : now - readAt < 60_000 ? 'now' : `${duration(now - readAt)} ago`
-    const resetMeter = (key: Key, label: string, w: Window | null, isWeek: boolean, segments?: number): Meter => {
+    const resetMeter = (key: Key, label: string, w: Window | null, isWeek: boolean, segments?: number, spanMs?: number): Meter => {
       const resetAt = w?.resetsAt ? Date.parse(w.resetsAt) : NaN
       const when = (ms: number) => (isWeek ? dayTime(ms) : clockTime(ms))
       // Past its reset time the window is back to zero, whatever was last read.
@@ -544,6 +553,7 @@ export const register: Register = on => {
       }
       const hasReset = Number.isFinite(resetAt)
       const at = hasReset ? when(resetAt) : ''
+      const nowAt = hasReset && spanMs !== undefined ? clamp(100 - ((resetAt - now) / spanMs) * 100) : undefined
       return {
         key,
         label,
@@ -555,6 +565,7 @@ export const register: Register = on => {
           ? [`Resets in ${duration(resetAt - now)}`, `${isWeek ? 'on' : 'at'} ${at}${age ? ` · ${age}` : ''}`]
           : ['No reading yet', ''],
         ...(segments === undefined ? {} : { segments }),
+        ...(nowAt === undefined ? {} : { now: nowAt }),
       }
     }
 
@@ -562,7 +573,7 @@ export const register: Register = on => {
       ctxMeter,
       cchMeter,
       resetMeter('ses', 'Ses', usage.fiveHour, false),
-      resetMeter('wk', 'Wk', usage.week, true, 7),
+      resetMeter('wk', 'Wk', usage.week, true, 7, WEEK),
     ]
   }
 
@@ -603,6 +614,11 @@ export const register: Register = on => {
                     <Text color={DIVIDER}>│</Text>
                   </Box>
                 ))}
+                {m.now === undefined ? null : (
+                  <Box key={`now-${m.key}`} position="absolute" top={0} left={0} width={`${Math.round(m.now)}%`} height={1} flexDirection="row" justifyContent="flex-end">
+                    <Text color={NOW_TICK}>┃</Text>
+                  </Box>
+                )}
                 {m.mark === undefined ? null : (
                   <Box key={`mark-${m.key}`} position="absolute" top={0} left={0} width={`${Math.round(clamp(m.mark))}%`} height={1} flexDirection="row" justifyContent="flex-end">
                     <Text color={MARK}>▕</Text>

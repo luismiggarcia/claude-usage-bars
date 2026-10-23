@@ -253,3 +253,23 @@ for (const surface of ['terminal', 'desktop'] as const) {
     }
   })
 }
+
+for (const surface of ['terminal', 'desktop'] as const) {
+  test(`the week bar marks how much of the week has gone (${surface})`, async ($, on) => {
+    world(on)
+    await start($)
+    const ui = await mountBand($, surface)
+    // 59.5 h left of 168: 108.5 h gone, 64.6%
+    if (surface === 'desktop') {
+      const svgs = (await ui.findAll({ type: 'Svg' })).map(props)
+      expect(svgs[3]?.source).toContain('data-now="64.6"')
+      for (const p of svgs.slice(0, 3)) expect(p.source).not.toContain('data-now')
+    } else {
+      expect(await ui.findAll({ type: 'Text', text: '┃' })).toHaveLength(1)
+      const now = (await ui.findAll({ type: 'Box' }))
+        .map(b => (b as { props?: { width?: unknown; position?: string } }).props ?? {})
+        .filter(p => p.position === 'absolute' && p.width === '65%')
+      expect(now).toHaveLength(1)
+    }
+  })
+}
