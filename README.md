@@ -12,7 +12,7 @@ A Claude Code mod that shows four meters in one line right above the prompt box:
 - Each bar keeps its own colour. The value beside it follows a scale: yellow from 75%, orange bold from 85%, red bold from 95%. For the cache the scale reads the time already gone, so it turns yellow with 15 minutes left.
 - Hovering a bar shows its alternative text, in two lines. A click on the bar or its label pins it; another click unpins it. Hovering a pinned text shows it in full.
 - Hovering a label (Ctx, Cch, Ses, Wk) shows its full name in the graph's place.
-- In the red band a meter shows its alternative text by itself.
+- In the red band a meter shows its alternative text by itself. Hovering it shows the bar; a click pins the bar until the meter leaves the red band, another click brings the text back.
 - On the desktop the bars are thin SVG pills; in the terminal, blocks of colour.
 - Warnings, as a toast: the prompt cache about to expire while the session waits for a prompt (5 minutes before, or 1 minute for a 5-minute cache), and the session or week window crossing 85% and 95%. Each is given once (a window's once per reset, across sessions). The cache warning and the 95% one also go out as a system notification, where the session has a channel for it.
 

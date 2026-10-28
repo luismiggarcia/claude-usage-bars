@@ -390,18 +390,22 @@ export const register: Register = on => {
   let cacheWarnedFor: number | null = null
   // The token count at which the context is compacted; undefined when off.
   let compactAt: number | undefined
-  // Meters the person pinned to their alternative text with a click, and the
-  // one under the pointer.
-  const pinned = new Set<Key>()
+  // The face a click put a meter on, where it differs from the meter's own (the
+  // alternative text in the red band, the pill out of it); the meters last drawn
+  // in the red band; and the one under the pointer.
+  const chosen = new Map<Key, 'pill' | 'alt'>()
+  const inRedBand = new Set<Key>()
   let hovered: Key | null = null
   let hoveredLabel: Key | null = null
   let hoveredValue: Key | null = null
   let isKeepingAlive = false
   let isArmed = false
   const isKey = (k: unknown): k is Key => k === 'ctx' || k === 'cch' || k === 'ses' || k === 'wk'
+  const ownFace = (k: Key): 'pill' | 'alt' => (inRedBand.has(k) ? 'alt' : 'pill')
   const toggle = (k: Key) => {
-    if (pinned.has(k)) pinned.delete(k)
-    else pinned.add(k)
+    const face = (chosen.get(k) ?? ownFace(k)) === 'alt' ? 'pill' : 'alt'
+    if (face === ownFace(k)) chosen.delete(k)
+    else chosen.set(k, face)
   }
 
   // Stamps this session's fresh reading of the windows, as the others read it.
@@ -668,7 +672,8 @@ export const register: Register = on => {
   // The elements come from each surface's table. Four columns of equal width:
   // label, graph and value. Hovering the graph shows the next face; a click on
   // the graph or on the label pins the alternative text, a second one unpins
-  // it; in the red band the alternative text shows by itself.
+  // it. In the red band the alternative text shows by itself: hovering shows the
+  // pill, and a click pins the pill until the meter leaves the red band.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const usageLine = (Box: any, Text: any, Button: any, Svg: any, Client: any, list: Meter[], bodyColumns: number, onLabel: (k: Key) => void) => {
     const isTerminal = Svg === undefined
@@ -683,8 +688,11 @@ export const register: Register = on => {
         {list.map(m => {
           const level = m.level === undefined ? undefined : levelFor(m.level)
           const valueColor = m.level === undefined ? 'inactive' : (level?.color ?? HUES[m.key])
-          const isPinned = pinned.has(m.key) || (m.level !== undefined && m.level >= RED_BAND)
-          const rest: Face = isPinned ? 'alt' : 'pill'
+          if (m.level !== undefined && m.level >= RED_BAND) inRedBand.add(m.key)
+          else inRedBand.delete(m.key)
+          // a choice the band has caught up with is the meter's own again
+          if (chosen.get(m.key) === ownFace(m.key)) chosen.delete(m.key)
+          const rest: Face = chosen.get(m.key) ?? ownFace(m.key)
           const isOffering = m.keepAlive !== undefined && hoveredValue === m.key
           const valueText = m.isArmed ? `${KEEP_ALIVE_GLYPH}${m.value}` : m.value
           const face: Face =
@@ -693,9 +701,11 @@ export const register: Register = on => {
               : isOffering
                 ? 'keep'
                 : hovered === m.key
-                  ? rest === 'alt'
-                    ? 'verbose'
-                    : 'alt'
+                  ? rest === 'pill'
+                    ? 'alt'
+                    : chosen.has(m.key)
+                      ? 'verbose'
+                      : 'pill'
                   : rest
           const text = face === 'alt' ? m.alt : face === 'name' ? NAMES[m.key] : face === 'keep' && m.keepAlive ? m.keepAlive : m.verbose
           const graph = isTerminal ? (

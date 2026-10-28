@@ -140,6 +140,30 @@ test('past its lifetime the cache reads expired, with what the next prompt costs
   expect(cch.source).toContain('data-face="alt"')
 })
 
+test('the pill a click chose in the red band lasts until the meter leaves it', async ($, on) => {
+  let clock = NOW
+  world(on, { store: { s1: NOW - 75 * MIN }, now: () => clock })
+  on('store.set', () => ({ value: undefined }))
+  on('fs.write', () => ({ value: undefined }))
+  on('process.run', () => ran(0))
+  await start($)
+  const ui = await mountBand($)
+  const faceOf = async () => /data-face="(\w+)"/.exec(props((await ui.findAll({ type: 'Svg' }))[1]).source ?? '')?.[1]
+  const pointer = (type: 'enter' | 'leave' | 'down', meter: string) =>
+    ui.pointer({ type, x: 1, y: 0, ...(type === 'down' ? { button: 'left' as const } : {}), in: `hit-${meter}` })
+  expect(await faceOf()).toBe('alt')
+  await pointer('down', 'cch')
+  expect(await faceOf()).toBe('pill')
+  // a response renews the cache: out of the red band, the pill is its own face
+  await respond($)
+  await pointer('enter', 'ctx')
+  expect(await faceOf()).toBe('pill')
+  // expired again: the text comes back by itself
+  clock = NOW + 75 * MIN
+  await pointer('leave', 'ctx')
+  expect(await faceOf()).toBe('alt')
+})
+
 test('each response in the middle of a long turn renews the cache', async ($, on) => {
   let clock = NOW - 70 * MIN
   world(on, { now: () => clock })

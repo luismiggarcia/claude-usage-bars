@@ -113,6 +113,20 @@ for (const surface of ['terminal', 'desktop'] as const) {
       await labelPointer('leave', 'cch')
       await pointer('enter', 'cch')
       expect((await svgs())[1]?.source).toContain('>9k now, 180k expired</text>')
+      await pointer('leave', 'cch')
+
+      // the red-band week: hovering its text shows the pill, a click pins the pill, a second one the text
+      await pointer('enter', 'wk')
+      expect(await faceOf(3)).toBe('pill')
+      await pointer('leave', 'wk')
+      expect(await faceOf(3)).toBe('alt')
+      await pointer('enter', 'wk')
+      await pointer('down', 'wk')
+      await pointer('leave', 'wk')
+      expect(await faceOf(3)).toBe('pill')
+      await labelPointer('down', 'wk')
+      await labelPointer('leave', 'wk')
+      expect(await faceOf(3)).toBe('alt')
     } else {
       // terminal: blocks in the meter's hue; the red-band week shows its alternative text
       const fills = (await ui.findAll({ type: 'Box' }))
